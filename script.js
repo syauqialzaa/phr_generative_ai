@@ -42,7 +42,7 @@ function initializeWebSocket() {
     
     ws.onopen = () => {
         updateConnectionStatus(true);
-        addSystemMessage('Connected to PHR Generative AI server');
+        addSystemMessage('Connected to PHR Generative AI server with DCA Integration');
     };
     
     ws.onclose = () => {
@@ -90,6 +90,20 @@ function createMessageElement(content, isUser = false) {
     return messageDiv;
 }
 
+// Format text with bullet points and styling
+function formatExplanation(text) {
+    // Replace bullet points with HTML
+    text = text.replace(/•/g, '&bull;');
+    
+    // Bold text between **
+    text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Convert newlines to <br>
+    text = text.replace(/\n/g, '<br>');
+    
+    return text;
+}
+
 // Handle sending questions
 async function sendQuestion() {
     const questionInput = document.getElementById('question-input');
@@ -105,7 +119,7 @@ async function sendQuestion() {
     // Show typing indicator
     const typingDiv = document.createElement('div');
     typingDiv.className = 'message assistant-message typing-indicator';
-    typingDiv.innerHTML = 'AI sedang mengetik<span class="dots">...</span>';
+    typingDiv.innerHTML = 'AI sedang menganalisis<span class="dots">...</span>';
     typingDiv.id = 'typing-indicator';
     chatMessages.appendChild(typingDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -169,11 +183,73 @@ function handleResponse(data) {
     // Handle main explanation/response
     if (data.explanation) {
         const explanationDiv = document.createElement('div');
-        explanationDiv.innerHTML = data.explanation.replace(/\n/g, '<br>');
+        explanationDiv.className = 'explanation-content';
+        explanationDiv.innerHTML = formatExplanation(data.explanation);
         assistantContainer.appendChild(explanationDiv);
     }
     
-    // Handle SQL code display (if applicable)
+    // Handle visualization (DCA charts)
+    if (data.visualization) {
+        const vizContainer = document.createElement('div');
+        vizContainer.className = 'visualization-container';
+        
+        const img = document.createElement('img');
+        img.className = 'visualization';
+        img.src = `data:image/png;base64,${data.visualization}`;
+        img.alt = 'DCA Analysis Chart';
+        img.style.maxWidth = '100%';
+        img.style.height = 'auto';
+        img.style.marginTop = '10px';
+        img.style.borderRadius = '8px';
+        img.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
+        
+        vizContainer.appendChild(img);
+        assistantContainer.appendChild(vizContainer);
+    }
+    
+    // Handle interactive app URL
+    if (data.app_url) {
+        const appLinkContainer = document.createElement('div');
+        appLinkContainer.className = 'app-link-container';
+        appLinkContainer.style.marginTop = '15px';
+        appLinkContainer.style.padding = '15px';
+        appLinkContainer.style.background = '#f0f7ff';
+        appLinkContainer.style.borderRadius = '8px';
+        appLinkContainer.style.border = '1px solid #e0e7ff';
+        
+        const linkText = document.createElement('p');
+        linkText.style.margin = '0 0 10px 0';
+        linkText.style.color = '#4a5568';
+        linkText.innerHTML = '📊 <strong>Untuk analisis interaktif lebih detail:</strong>';
+        
+        const linkButton = document.createElement('a');
+        linkButton.href = data.app_url;
+        linkButton.target = '_blank';
+        linkButton.rel = 'noopener noreferrer';
+        linkButton.className = 'app-link-button';
+        linkButton.style.display = 'inline-block';
+        linkButton.style.padding = '10px 20px';
+        linkButton.style.background = '#3b82f6';
+        linkButton.style.color = 'white';
+        linkButton.style.textDecoration = 'none';
+        linkButton.style.borderRadius = '6px';
+        linkButton.style.fontWeight = '500';
+        linkButton.style.transition = 'background 0.2s';
+        linkButton.textContent = 'Buka Aplikasi DCA';
+        
+        linkButton.onmouseover = () => {
+            linkButton.style.background = '#2563eb';
+        };
+        linkButton.onmouseout = () => {
+            linkButton.style.background = '#3b82f6';
+        };
+        
+        appLinkContainer.appendChild(linkText);
+        appLinkContainer.appendChild(linkButton);
+        assistantContainer.appendChild(appLinkContainer);
+    }
+    
+    // Handle SQL code display (if applicable - for legacy support)
     if (data.sql) {
         const sqlDiv = document.createElement('div');
         sqlDiv.className = 'sql-code';
@@ -181,27 +257,17 @@ function handleResponse(data) {
         assistantContainer.appendChild(sqlDiv);
     }
     
-    // Handle visualization (if applicable)
-    if (data.visualization) {
-        const img = document.createElement('img');
-        img.className = 'visualization';
-        img.src = `data:image/png;base64,${data.visualization}`;
-        assistantContainer.appendChild(img);
-
-        if (data.visualization_explanation) {
-            const vizExp = document.createElement('div');
-            vizExp.className = 'visualization-explanation';
-            vizExp.textContent = data.visualization_explanation;
-            assistantContainer.appendChild(vizExp);
-        }
-    }
-    
     // Handle tabular data (if applicable)
     if (data.data && data.data.length > 0) {
         const tableWrapper = document.createElement('div');
         tableWrapper.className = 'data-table-wrapper';
+        tableWrapper.style.marginTop = '10px';
+        tableWrapper.style.overflowX = 'auto';
+        
         const table = document.createElement('table');
         table.className = 'data-table';
+        table.style.width = '100%';
+        table.style.borderCollapse = 'collapse';
         
         // Add headers
         const thead = document.createElement('thead');
@@ -209,6 +275,10 @@ function handleResponse(data) {
         Object.keys(data.data[0]).forEach(key => {
             const th = document.createElement('th');
             th.textContent = key;
+            th.style.padding = '8px';
+            th.style.borderBottom = '2px solid #e5e7eb';
+            th.style.textAlign = 'left';
+            th.style.fontWeight = '600';
             headerRow.appendChild(th);
         });
         thead.appendChild(headerRow);
@@ -221,6 +291,8 @@ function handleResponse(data) {
             Object.values(row).forEach(value => {
                 const td = document.createElement('td');
                 td.textContent = value !== null ? value : '';
+                td.style.padding = '8px';
+                td.style.borderBottom = '1px solid #e5e7eb';
                 tr.appendChild(td);
             });
             tbody.appendChild(tr);
@@ -229,24 +301,6 @@ function handleResponse(data) {
         
         tableWrapper.appendChild(table);
         assistantContainer.appendChild(tableWrapper);
-    }
-
-    // Handle external app links (if applicable)
-    if (data.app_url) {
-        const appLink = document.createElement('div');
-        appLink.className = 'external-app-link';
-        
-        let appType = 'detailed analysis';
-        if (data.app_url.includes('dca')) {
-            appType = 'DCA analysis';
-        } else if (data.app_url.includes('wellbore')) {
-            appType = 'wellbore visualization';
-        }
-        
-        appLink.innerHTML = `
-            <p>For more detailed ${appType}, open the app: <a href="${data.app_url}" target="_blank" rel="noopener noreferrer">${data.app_url}</a></p>
-        `;
-        assistantContainer.appendChild(appLink);
     }
     
     chatMessages.appendChild(assistantContainer);
@@ -282,7 +336,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     
-    // Add some styling for typing indicator
+    // Add some styling for typing indicator and DCA-specific elements
     const style = document.createElement('style');
     style.textContent = `
         .typing-indicator {
@@ -294,6 +348,36 @@ document.addEventListener('DOMContentLoaded', () => {
         @keyframes blink {
             0%, 50% { opacity: 1; }
             51%, 100% { opacity: 0; }
+        }
+        .explanation-content {
+            line-height: 1.6;
+        }
+        .explanation-content strong {
+            color: #1a202c;
+        }
+        .visualization-container {
+            margin-top: 15px;
+        }
+        .app-link-container {
+            background: linear-gradient(135deg, #f0f7ff 0%, #e0f2fe 100%);
+        }
+        .message.assistant-message {
+            max-width: 80%;
+        }
+        .data-table-wrapper {
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .data-table {
+            font-size: 14px;
+        }
+        .data-table th {
+            background-color: #f8fafc;
+            color: #1a202c;
+        }
+        .data-table tr:hover {
+            background-color: #f7fafc;
         }
     `;
     document.head.appendChild(style);
