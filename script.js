@@ -1,7 +1,7 @@
 const API_CONFIG = {
     REST_URL: null,
     WS_URL: null,
-    DEFAULT_URL: window.localStorage.getItem('SERVER_URL') || 'http://localhost:8001'
+    DEFAULT_URL: window.localStorage.getItem('NGROK_URL') || 'http://localhost:8001'
 };
 
 // WebSocket connection
@@ -17,7 +17,7 @@ async function initializeApiConfig() {
     }
     
     if (!API_CONFIG.REST_URL) {
-        let apiUrl = prompt("Please enter the Server URL (e.g., http://localhost:8001 or ngrok URL):", API_CONFIG.DEFAULT_URL);
+        let apiUrl = prompt("Please enter the API URL (from ngrok):", "");
         if (apiUrl) {
             apiUrl = apiUrl.replace(/\/$/, "");
             const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws';
@@ -25,7 +25,6 @@ async function initializeApiConfig() {
             API_CONFIG.REST_URL = apiUrl;
             API_CONFIG.WS_URL = wsUrl;
             localStorage.setItem('API_CONFIG', JSON.stringify(API_CONFIG));
-            localStorage.setItem('SERVER_URL', apiUrl);
         }
     }
     
@@ -42,7 +41,7 @@ function initializeWebSocket() {
     
     ws.onopen = () => {
         updateConnectionStatus(true);
-        addSystemMessage('Connected to PHR Generative AI server');
+        addSystemMessage('Connected to chat server');
     };
     
     ws.onclose = () => {
@@ -86,7 +85,7 @@ function addSystemMessage(message) {
 function createMessageElement(content, isUser = false) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-    messageDiv.innerHTML = content.replace(/\n/g, '<br>');
+    messageDiv.textContent = content;
     return messageDiv;
 }
 
@@ -98,17 +97,8 @@ async function sendQuestion() {
     
     if (!question) return;
     
-    // Show user message
     chatMessages.appendChild(createMessageElement(question, true));
     questionInput.value = '';
-    
-    // Show typing indicator
-    const typingDiv = document.createElement('div');
-    typingDiv.className = 'message assistant-message typing-indicator';
-    typingDiv.innerHTML = 'AI sedang mengetik<span class="dots">...</span>';
-    typingDiv.id = 'typing-indicator';
-    chatMessages.appendChild(typingDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
     
     const messageData = {
         question: question,
@@ -119,7 +109,6 @@ async function sendQuestion() {
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(messageData));
         } else {
-            // Fallback to REST API
             const response = await fetch(`${API_CONFIG.REST_URL}/api/query`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -128,35 +117,16 @@ async function sendQuestion() {
             
             if (!response.ok) throw new Error('Network response was not ok');
             const data = await response.json();
-            
-            // Remove typing indicator
-            const typingIndicator = document.getElementById('typing-indicator');
-            if (typingIndicator) {
-                typingIndicator.remove();
-            }
-            
             handleResponse(data);
         }
     } catch (error) {
-        // Remove typing indicator on error
-        const typingIndicator = document.getElementById('typing-indicator');
-        if (typingIndicator) {
-            typingIndicator.remove();
-        }
-        addSystemMessage('Maaf, terjadi kesalahan saat memproses permintaan Anda.');
-        console.error('Error:', error);
+        addSystemMessage('Sorry, there was an error processing your request.');
     }
 }
 
 // Handle response from server
 function handleResponse(data) {
     const chatMessages = document.getElementById('chat-messages');
-    
-    // Remove typing indicator if exists
-    const typingIndicator = document.getElementById('typing-indicator');
-    if (typingIndicator) {
-        typingIndicator.remove();
-    }
     
     if (data.type === 'error') {
         addSystemMessage(`Error: ${data.message}`);
@@ -166,14 +136,12 @@ function handleResponse(data) {
     const assistantContainer = document.createElement('div');
     assistantContainer.className = 'message assistant-message';
     
-    // Handle main explanation/response
     if (data.explanation) {
         const explanationDiv = document.createElement('div');
-        explanationDiv.innerHTML = data.explanation.replace(/\n/g, '<br>');
+        explanationDiv.textContent = data.explanation;
         assistantContainer.appendChild(explanationDiv);
     }
     
-    // Handle SQL code display (if applicable)
     if (data.sql) {
         const sqlDiv = document.createElement('div');
         sqlDiv.className = 'sql-code';
@@ -181,7 +149,6 @@ function handleResponse(data) {
         assistantContainer.appendChild(sqlDiv);
     }
     
-    // Handle visualization (if applicable)
     if (data.visualization) {
         const img = document.createElement('img');
         img.className = 'visualization';
@@ -189,14 +156,13 @@ function handleResponse(data) {
         assistantContainer.appendChild(img);
 
         if (data.visualization_explanation) {
-            const vizExp = document.createElement('div');
-            vizExp.className = 'visualization-explanation';
-            vizExp.textContent = data.visualization_explanation;
-            assistantContainer.appendChild(vizExp);
-        }
+          const vizExp = document.createElement('div');
+          vizExp.className = 'visualization-explanation';
+          vizExp.textContent = data.visualization_explanation;
+          assistantContainer.appendChild(vizExp);
+      }
     }
     
-    // Handle tabular data (if applicable)
     if (data.data && data.data.length > 0) {
         const tableWrapper = document.createElement('div');
         tableWrapper.className = 'data-table-wrapper';
@@ -231,16 +197,18 @@ function handleResponse(data) {
         assistantContainer.appendChild(tableWrapper);
     }
 
-    // Handle external app links (if applicable)
     if (data.app_url) {
         const appLink = document.createElement('div');
         appLink.className = 'external-app-link';
         
-        let appType = 'detailed analysis';
+        // Determine app type for more specific message
+        let appType = '';
         if (data.app_url.includes('dca')) {
             appType = 'DCA analysis';
         } else if (data.app_url.includes('wellbore')) {
             appType = 'wellbore visualization';
+        } else {
+            appType = 'detailed visualization';
         }
         
         appLink.innerHTML = `
@@ -253,13 +221,6 @@ function handleResponse(data) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// Clear chat history
-function clearChat() {
-    const chatMessages = document.getElementById('chat-messages');
-    chatMessages.innerHTML = '';
-    addSystemMessage('Chat history cleared');
-}
-
 // Initialize when page loads
 document.addEventListener('DOMContentLoaded', () => {
     initializeApiConfig();
@@ -269,7 +230,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (configBtn) {
         configBtn.addEventListener('click', () => {
             localStorage.removeItem('API_CONFIG');
-            localStorage.removeItem('SERVER_URL');
             if (ws) ws.close();
             initializeApiConfig();
         });
@@ -281,20 +241,4 @@ document.addEventListener('DOMContentLoaded', () => {
             sendQuestion();
         }
     });
-    
-    // Add some styling for typing indicator
-    const style = document.createElement('style');
-    style.textContent = `
-        .typing-indicator {
-            opacity: 0.7;
-        }
-        .typing-indicator .dots {
-            animation: blink 1.4s infinite;
-        }
-        @keyframes blink {
-            0%, 50% { opacity: 1; }
-            51%, 100% { opacity: 0; }
-        }
-    `;
-    document.head.appendChild(style);
 });

@@ -1,8 +1,40 @@
+# FastAPI and Web Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-websockets==12.0
-httpx==0.25.2
-pydantic==2.5.0
-python-multipart==0.0.6
-python-dotenv==1.0.0
+websockets==13.1
+python-multipart==0.0.12
+
+# CORS and Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.1
+
+# LLM Providers
+google-genai>=1.0.0
+langchain==0.3.7
+# langchain-google-genai==2.1.5
 google-generativeai==0.8.5
+
+# Data Processing and Analysis
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+
+# Visualization
+matplotlib==3.9.2
+plotly==5.24.1
+# kaleido==0.2.1  # For plotly static image export
+
+# HTTP Client
+aiohttp==3.10.10
+
+# Language Detection
+langdetect==1.0.9
+
+# Vector Store (Milvus Lite)
+pymilvus==2.4.10
+milvus==2.3.3
+
+# Other utilities
+pydantic==2.9.2
+typing-extensions==4.12.2

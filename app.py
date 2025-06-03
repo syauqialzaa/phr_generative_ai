@@ -1,22 +1,19 @@
-import os
 import json
 from datetime import datetime
-from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
 import uvicorn
-from dotenv import load_dotenv
 import logging
 
-# Import LLM provider manager
+# Import custom modules
+from models import ChatMessage, ChatResponse
+from config import SERVER_HOST, SERVER_PORT
+from dca_assistant import DCAAssistant
+from websocket_manager import ConnectionManager
 from llm_providers import LLMProviderManager
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,11 +22,16 @@ logger = logging.getLogger(__name__)
 # Initialize LLM Provider Manager
 provider_manager = LLMProviderManager()
 
+# Initialize Connection Manager
+manager = ConnectionManager()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan event handler untuk startup dan shutdown"""
+    """Lifespan event handler for startup and shutdown"""
     # Startup events
-    logger.info("Starting up PHR Generative AI Chat Server...")
+    logger.info("Starting up PHR Generative AI Chat Server with DCA Integration...")
+    
+    # Initialize LLM
     success = await provider_manager.initialize()
     if not success:
         logger.error("Failed to initialize AI service")
@@ -37,17 +39,18 @@ async def lifespan(app: FastAPI):
         provider_info = provider_manager.get_provider_info()
         logger.info(f"AI service ready: {provider_info}")
     
-    yield  # Aplikasi berjalan di sini
+    # Initialize DCA Assistant
+    app.state.dca_assistant = DCAAssistant()
     
-    # Shutdown events (optional)
+    yield  # Application runs here
+    
+    # Shutdown events
     logger.info("Shutting down PHR Generative AI Chat Server...")
-    # Tambahkan cleanup code di sini jika diperlukan
-    # await provider_manager.cleanup()
 
-# Initialize FastAPI app dengan lifespan
+# Initialize FastAPI app with lifespan
 app = FastAPI(
-    title="PHR Generative AI Chat Server", 
-    version="1.0.0",
+    title="PHR Generative AI Chat Server with DCA Integration", 
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -58,90 +61,25 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,
 )
 
-# Pydantic models
-class ChatMessage(BaseModel):
-    question: str
-    timestamp: str
-
-class ChatResponse(BaseModel):
-    type: str = "response"
-    explanation: Optional[str] = None
-    message: Optional[str] = None
-    timestamp: str = None
-
-# WebSocket connection manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-        self.chat_histories: Dict[str, List[Dict]] = {}
-
-    async def connect(self, websocket: WebSocket, client_id: str):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        if client_id not in self.chat_histories:
-            self.chat_histories[client_id] = []
-        logger.info(f"Client {client_id} connected. Total connections: {len(self.active_connections)}")
-
-    def disconnect(self, websocket: WebSocket, client_id: str):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info(f"Client {client_id} disconnected. Total connections: {len(self.active_connections)}")
-
-    async def send_personal_message(self, message: dict, websocket: WebSocket):
-        try:
-            await websocket.send_text(json.dumps(message))
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
-
-    def add_to_history(self, client_id: str, role: str, content: str):
-        if client_id not in self.chat_histories:
-            self.chat_histories[client_id] = []
-        
-        self.chat_histories[client_id].append({
-            "role": role,
-            "content": content
-        })
-        
-        # Keep only last 20 messages to manage memory
-        if len(self.chat_histories[client_id]) > 20:
-            self.chat_histories[client_id] = self.chat_histories[client_id][-20:]
-
-    def get_history(self, client_id: str) -> List[Dict]:
-        return self.chat_histories.get(client_id, [])
-
-    def clear_history(self, client_id: str):
-        if client_id in self.chat_histories:
-            self.chat_histories[client_id] = []
-
-manager = ConnectionManager()
-
-# Generate response using configured LLM provider
-async def generate_response(question: str, client_id: str) -> dict:
+async def generate_response(question: str, client_id: str, app_state) -> dict:
+    """Generate response using DCA Assistant"""
     try:
-        if not provider_manager.provider:
-            return {
-                "type": "error",
-                "message": "AI service not available",
-                "timestamp": datetime.now().isoformat()
-            }
-
         # Get chat history for context
         history = manager.get_history(client_id)
         
-        # Generate response
-        response_text = await provider_manager.generate_response(question, history)
+        # Process with DCA Assistant
+        response = await app_state.dca_assistant.process_query(question, history)
         
         # Add to history
         manager.add_to_history(client_id, "user", question)
-        manager.add_to_history(client_id, "assistant", response_text)
+        if response.get("explanation"):
+            manager.add_to_history(client_id, "assistant", response["explanation"])
         
-        return {
-            "type": "response",
-            "explanation": response_text,
-            "timestamp": datetime.now().isoformat()
-        }
+        return response
         
     except Exception as e:
         logger.error(f"Error generating response: {e}")
@@ -156,36 +94,38 @@ app.mount("/static", StaticFiles(directory="."), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def get_homepage():
+    """Serve the main page"""
     try:
         with open("index.html", "r", encoding="utf-8") as file:
             return file.read()
     except FileNotFoundError:
         return HTMLResponse("<h1>Index.html not found</h1>", status_code=404)
 
-# Health check endpoint
 @app.get("/health")
 async def health_check():
+    """Health check endpoint"""
     provider_info = provider_manager.get_provider_info()
     return {
         "status": "healthy" if provider_info["initialized"] else "degraded",
         "timestamp": datetime.now().isoformat(),
-        "ai_service": provider_info
+        "ai_service": provider_info,
+        "dca_integration": True
     }
 
-# Get provider information
 @app.get("/api/provider-info")
 async def get_provider_info():
+    """Get AI provider information"""
     return provider_manager.get_provider_info()
 
-# REST API endpoint for chat
 @app.post("/api/query")
 async def process_query(message: ChatMessage):
+    """REST API endpoint for processing queries"""
     try:
         client_id = f"rest_client_{datetime.now().timestamp()}"
         
         logger.info(f"Processing query from {client_id}: {message.question}")
         
-        response = await generate_response(message.question, client_id)
+        response = await generate_response(message.question, client_id, app.state)
         
         return response
         
@@ -193,9 +133,9 @@ async def process_query(message: ChatMessage):
         logger.error(f"Error processing REST query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time chat"""
     client_id = f"ws_client_{datetime.now().timestamp()}"
     await manager.connect(websocket, client_id)
     
@@ -206,7 +146,7 @@ async def websocket_endpoint(websocket: WebSocket):
         
         welcome_message = {
             "type": "response",
-            "explanation": f"Selamat datang di PHR Generative AI (powered by {provider_name})! Saya siap membantu Anda. Silakan ajukan pertanyaan dalam bahasa apapun.",
+            "explanation": f"Selamat datang di PHR Generative AI dengan DCA Integration (powered by {provider_name})! Saya siap membantu analisis DCA dan produksi sumur Anda. Silakan ajukan pertanyaan seputar DCA dalam bahasa apapun.",
             "timestamp": datetime.now().isoformat()
         }
         await manager.send_personal_message(welcome_message, websocket)
@@ -221,7 +161,8 @@ async def websocket_endpoint(websocket: WebSocket):
             # Process the question
             response = await generate_response(
                 message_data.get("question", ""), 
-                client_id
+                client_id,
+                app.state
             )
             
             # Send response back to client
@@ -242,9 +183,9 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
         manager.disconnect(websocket, client_id)
 
-# Clear chat history endpoint
 @app.delete("/api/clear-history/{client_id}")
 async def clear_chat_history(client_id: str):
+    """Clear chat history for a specific client"""
     try:
         manager.clear_history(client_id)
         return {"message": "Chat history cleared successfully"}
@@ -252,40 +193,36 @@ async def clear_chat_history(client_id: str):
         logger.error(f"Error clearing chat history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Get chat statistics
 @app.get("/api/stats")
 async def get_stats():
+    """Get application statistics"""
     provider_info = provider_manager.get_provider_info()
+    connection_stats = manager.get_stats()
+    
     return {
-        "active_connections": len(manager.active_connections),
-        "total_chat_sessions": len(manager.chat_histories),
+        **connection_stats,
         "ai_service": provider_info,
+        "dca_integration": True,
         "timestamp": datetime.now().isoformat()
     }
 
-# Switch provider endpoint (for development/testing)
-@app.post("/api/switch-provider/{provider_type}")
-async def switch_provider(provider_type: str):
+@app.get("/api/chat-history/{client_id}")
+async def get_chat_history(client_id: str):
+    """Get chat history for a specific client"""
     try:
-        success = await provider_manager.initialize(provider_type)
-        if success:
-            return {"message": f"Successfully switched to {provider_type} provider"}
-        else:
-            raise HTTPException(status_code=400, detail=f"Failed to initialize {provider_type} provider")
+        history = manager.get_history(client_id)
+        return {"history": history}
     except Exception as e:
-        logger.error(f"Error switching provider: {e}")
+        logger.error(f"Error getting chat history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8001))
-    host = os.getenv("HOST", "0.0.0.0")
-    
-    logger.info(f"Starting PHR Generative AI Chat Server on {host}:{port}")
+    logger.info(f"Starting PHR Generative AI Chat Server with DCA Integration on {SERVER_HOST}:{SERVER_PORT}")
     
     uvicorn.run(
         "app:app",
-        host=host,
-        port=port,
+        host=SERVER_HOST,
+        port=SERVER_PORT,
         reload=True,
         log_level="info"
     )
