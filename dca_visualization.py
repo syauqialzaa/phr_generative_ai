@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 matplotlib.use('Agg')
 logger = logging.getLogger(__name__)
 
-class VisualizationGenerator:
+class DCAVisualizationGenerator:
     @staticmethod
     def create_production_chart(data: List[Dict], title: str = "Production History") -> str:
         """Create production chart for /get_history endpoint"""

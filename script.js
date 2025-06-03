@@ -41,7 +41,7 @@ function initializeWebSocket() {
     
     ws.onopen = () => {
         updateConnectionStatus(true);
-        addSystemMessage('Connected to chat server');
+        addSystemMessage('Connected to PHR Generative AI');
     };
     
     ws.onclose = () => {
@@ -81,12 +81,28 @@ function addSystemMessage(message) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// Create message element
+// Create message element with enhanced formatting
 function createMessageElement(content, isUser = false) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-    messageDiv.textContent = content;
+    
+    // Format content with line breaks and markdown-like formatting
+    if (!isUser && content.includes('\n')) {
+        messageDiv.innerHTML = formatAssistantMessage(content);
+    } else {
+        messageDiv.textContent = content;
+    }
+    
     return messageDiv;
+}
+
+// Enhanced message formatting for assistant responses
+function formatAssistantMessage(content) {
+    return content
+        .replace(/\n/g, '<br>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/🎯|📊|🔍|💡|⚡|🏗️|🔧|📈|📐|🤖|⚠️|✅|🚀/g, '<span class="emoji">$&</span>')
+        .replace(/•\s/g, '<span class="bullet">•</span> ');
 }
 
 // Handle sending questions
@@ -99,6 +115,9 @@ async function sendQuestion() {
     
     chatMessages.appendChild(createMessageElement(question, true));
     questionInput.value = '';
+    
+    // Show typing indicator
+    showTypingIndicator();
     
     const messageData = {
         question: question,
@@ -117,16 +136,38 @@ async function sendQuestion() {
             
             if (!response.ok) throw new Error('Network response was not ok');
             const data = await response.json();
+            hideTypingIndicator();
             handleResponse(data);
         }
     } catch (error) {
+        hideTypingIndicator();
         addSystemMessage('Sorry, there was an error processing your request.');
     }
 }
 
-// Handle response from server
+// Show typing indicator
+function showTypingIndicator() {
+    const chatMessages = document.getElementById('chat-messages');
+    const typingDiv = document.createElement('div');
+    typingDiv.id = 'typing-indicator';
+    typingDiv.className = 'message assistant-message typing-indicator';
+    typingDiv.innerHTML = '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span> AI is analyzing...';
+    chatMessages.appendChild(typingDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Hide typing indicator
+function hideTypingIndicator() {
+    const typingIndicator = document.getElementById('typing-indicator');
+    if (typingIndicator) {
+        typingIndicator.remove();
+    }
+}
+
+// Enhanced response handler for DCA and Wellbore data
 function handleResponse(data) {
     const chatMessages = document.getElementById('chat-messages');
+    hideTypingIndicator();
     
     if (data.type === 'error') {
         addSystemMessage(`Error: ${data.message}`);
@@ -136,36 +177,74 @@ function handleResponse(data) {
     const assistantContainer = document.createElement('div');
     assistantContainer.className = 'message assistant-message';
     
+    // Enhanced explanation formatting
     if (data.explanation) {
         const explanationDiv = document.createElement('div');
-        explanationDiv.textContent = data.explanation;
+        explanationDiv.className = 'explanation-content';
+        explanationDiv.innerHTML = formatAssistantMessage(data.explanation);
         assistantContainer.appendChild(explanationDiv);
     }
     
-    if (data.sql) {
-        const sqlDiv = document.createElement('div');
-        sqlDiv.className = 'sql-code';
-        sqlDiv.textContent = data.sql;
-        assistantContainer.appendChild(sqlDiv);
-    }
-    
+    // Enhanced visualization handling for both DCA and Wellbore
     if (data.visualization) {
+        const visualizationWrapper = document.createElement('div');
+        visualizationWrapper.className = 'visualization-wrapper';
+        
         const img = document.createElement('img');
         img.className = 'visualization';
         img.src = `data:image/png;base64,${data.visualization}`;
-        assistantContainer.appendChild(img);
+        img.alt = 'Generated visualization';
+        
+        // Add click to enlarge functionality
+        img.addEventListener('click', () => {
+            openImageModal(img.src);
+        });
+        
+        // Determine visualization type based on content
+        const vizTypeLabel = document.createElement('div');
+        vizTypeLabel.className = 'visualization-label';
+        
+        if (data.explanation && data.explanation.includes('Wellbore')) {
+            vizTypeLabel.textContent = '🏗️ Wellbore Diagram';
+        } else if (data.explanation && data.explanation.includes('DCA')) {
+            vizTypeLabel.textContent = '📊 DCA Analysis Chart';
+        } else if (data.explanation && data.explanation.includes('ML')) {
+            vizTypeLabel.textContent = '🤖 ML Prediction Chart';
+        } else {
+            vizTypeLabel.textContent = '📈 Production Analysis';
+        }
+        
+        visualizationWrapper.appendChild(vizTypeLabel);
+        visualizationWrapper.appendChild(img);
+        assistantContainer.appendChild(visualizationWrapper);
 
+        // Visualization explanation if available
         if (data.visualization_explanation) {
-          const vizExp = document.createElement('div');
-          vizExp.className = 'visualization-explanation';
-          vizExp.textContent = data.visualization_explanation;
-          assistantContainer.appendChild(vizExp);
-      }
+            const vizExp = document.createElement('div');
+            vizExp.className = 'visualization-explanation';
+            vizExp.innerHTML = formatAssistantMessage(data.visualization_explanation);
+            assistantContainer.appendChild(vizExp);
+        }
     }
     
+    // SQL code display (for DCA queries that might include database queries)
+    if (data.sql) {
+        const sqlDiv = document.createElement('div');
+        sqlDiv.className = 'sql-code';
+        sqlDiv.innerHTML = `<pre><code>${data.sql}</code></pre>`;
+        assistantContainer.appendChild(sqlDiv);
+    }
+    
+    // Enhanced data table display
     if (data.data && data.data.length > 0) {
         const tableWrapper = document.createElement('div');
         tableWrapper.className = 'data-table-wrapper';
+        
+        const tableTitle = document.createElement('div');
+        tableTitle.className = 'table-title';
+        tableTitle.textContent = '📊 Data Results';
+        tableWrapper.appendChild(tableTitle);
+        
         const table = document.createElement('table');
         table.className = 'data-table';
         
@@ -180,45 +259,123 @@ function handleResponse(data) {
         thead.appendChild(headerRow);
         table.appendChild(thead);
         
-        // Add data rows
+        // Add data rows with enhanced formatting
         const tbody = document.createElement('tbody');
-        data.data.forEach(row => {
+        data.data.slice(0, 10).forEach(row => { // Limit to first 10 rows for display
             const tr = document.createElement('tr');
             Object.values(row).forEach(value => {
                 const td = document.createElement('td');
-                td.textContent = value !== null ? value : '';
+                // Format numbers and dates
+                if (typeof value === 'number') {
+                    td.textContent = value.toLocaleString();
+                } else if (value && typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/)) {
+                    td.textContent = new Date(value).toLocaleDateString();
+                } else {
+                    td.textContent = value !== null ? value : '';
+                }
                 tr.appendChild(td);
             });
             tbody.appendChild(tr);
         });
         table.appendChild(tbody);
         
+        // Add row count info if data is truncated
+        if (data.data.length > 10) {
+            const moreRowsInfo = document.createElement('div');
+            moreRowsInfo.className = 'table-info';
+            moreRowsInfo.textContent = `Showing first 10 of ${data.data.length} rows`;
+            tableWrapper.appendChild(moreRowsInfo);
+        }
+        
         tableWrapper.appendChild(table);
         assistantContainer.appendChild(tableWrapper);
     }
 
+    // Enhanced app URL handling with specific messaging
     if (data.app_url) {
         const appLink = document.createElement('div');
         appLink.className = 'external-app-link';
         
-        // Determine app type for more specific message
+        // Determine app type and provide specific messaging
         let appType = '';
+        let appIcon = '';
+        let appDescription = '';
+        
         if (data.app_url.includes('dca')) {
-            appType = 'DCA analysis';
+            appType = 'DCA Analysis';
+            appIcon = '📊';
+            appDescription = 'interactive decline curve analysis, detailed predictions, and advanced modeling';
         } else if (data.app_url.includes('wellbore')) {
-            appType = 'wellbore visualization';
+            appType = 'Wellbore Visualization';
+            appIcon = '🏗️';
+            appDescription = 'interactive wellbore diagrams, component details, and 3D visualization';
         } else {
-            appType = 'detailed visualization';
+            appType = 'Detailed Analysis';
+            appIcon = '🔍';
+            appDescription = 'comprehensive analysis and advanced features';
         }
         
         appLink.innerHTML = `
-            <p>For more detailed ${appType}, open the app: <a href="${data.app_url}" target="_blank" rel="noopener noreferrer">${data.app_url}</a></p>
+            <div class="app-link-header">
+                <span class="app-icon">${appIcon}</span>
+                <strong>Open ${appType} App</strong>
+            </div>
+            <p class="app-description">For ${appDescription}:</p>
+            <a href="${data.app_url}" target="_blank" rel="noopener noreferrer" class="app-link-button">
+                🚀 Launch ${appType} App
+            </a>
         `;
         assistantContainer.appendChild(appLink);
     }
     
     chatMessages.appendChild(assistantContainer);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Image modal for enlarged visualization viewing
+function openImageModal(imageSrc) {
+    // Create modal overlay
+    const modal = document.createElement('div');
+    modal.className = 'image-modal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+        cursor: pointer;
+    `;
+    
+    // Create enlarged image
+    const img = document.createElement('img');
+    img.src = imageSrc;
+    img.style.cssText = `
+        max-width: 90%;
+        max-height: 90%;
+        object-fit: contain;
+        border-radius: 8px;
+    `;
+    
+    modal.appendChild(img);
+    
+    // Close modal on click
+    modal.addEventListener('click', () => {
+        document.body.removeChild(modal);
+    });
+    
+    document.body.appendChild(modal);
+}
+
+// Clear chat history
+function clearChatHistory() {
+    const chatMessages = document.getElementById('chat-messages');
+    chatMessages.innerHTML = '';
+    addSystemMessage('Chat history cleared. Ready for new questions about DCA analysis or wellbore diagrams.');
 }
 
 // Initialize when page loads
@@ -235,10 +392,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
+    // Add event listener for clear chat button
+    const clearBtn = document.getElementById('clear-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearChatHistory);
+    }
+    
     // Add event listener for Enter key
     document.getElementById('question-input').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             sendQuestion();
         }
     });
+    
+    // Auto-focus on input field
+    document.getElementById('question-input').focus();
 });

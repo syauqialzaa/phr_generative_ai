@@ -4,9 +4,9 @@ from typing import Dict, List
 import logging
 
 from dca_client import DCAApiClient
-from query_processor import DCAQueryProcessor
-from visualization import VisualizationGenerator
-from url_generator import DCAUrlGenerator
+from dca_query_processor import DCAQueryProcessor
+from dca_visualization import DCAVisualizationGenerator
+from dca_url_generator import DCAUrlGenerator
 from vector_store import VectorStoreManager
 from config import DCA_API_BASE_URL, DCA_APP_BASE_URL, MILVUS_DB_PATH
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class DCAAssistant:
     def __init__(self):
         self.query_processor = DCAQueryProcessor()
-        self.viz_generator = VisualizationGenerator()
+        self.viz_generator = DCAVisualizationGenerator()
         self.url_generator = DCAUrlGenerator()
         self.vector_store = VectorStoreManager(MILVUS_DB_PATH)
     

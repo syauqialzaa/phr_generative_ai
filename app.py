@@ -10,8 +10,8 @@ import logging
 
 # Import custom modules
 from models import ChatMessage, ChatResponse
-from config import SERVER_HOST, SERVER_PORT
-from dca_assistant import DCAAssistant
+from config import SERVER_HOST, SERVER_PORT, APP_NAME, APP_VERSION
+from unified_assistant import UnifiedAssistant
 from websocket_manager import ConnectionManager
 from llm_providers import LLMProviderManager
 
@@ -29,7 +29,7 @@ manager = ConnectionManager()
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown"""
     # Startup events
-    logger.info("Starting up PHR Generative AI Chat Server with DCA Integration...")
+    logger.info(f"Starting up {APP_NAME} v{APP_VERSION}...")
     
     # Initialize LLM
     success = await provider_manager.initialize()
@@ -39,18 +39,20 @@ async def lifespan(app: FastAPI):
         provider_info = provider_manager.get_provider_info()
         logger.info(f"AI service ready: {provider_info}")
     
-    # Initialize DCA Assistant
-    app.state.dca_assistant = DCAAssistant()
+    # Initialize Unified Assistant (handles both DCA and Wellbore)
+    app.state.unified_assistant = UnifiedAssistant()
+    logger.info("DCA and Wellbore Assistant initialized successfully")
     
     yield  # Application runs here
     
     # Shutdown events
-    logger.info("Shutting down PHR Generative AI Chat Server...")
+    logger.info(f"Shutting down {APP_NAME}...")
 
 # Initialize FastAPI app with lifespan
 app = FastAPI(
-    title="PHR Generative AI Chat Server with DCA Integration", 
-    version="2.0.0",
+    title=APP_NAME, 
+    version=APP_VERSION,
+    description="Advanced AI assistant for DCA analysis and wellbore visualization",
     lifespan=lifespan
 )
 
@@ -66,13 +68,13 @@ app.add_middleware(
 )
 
 async def generate_response(question: str, client_id: str, app_state) -> dict:
-    """Generate response using DCA Assistant"""
+    """Generate response using Unified Assistant"""
     try:
         # Get chat history for context
         history = manager.get_history(client_id)
         
-        # Process with DCA Assistant
-        response = await app_state.dca_assistant.process_query(question, history)
+        # Process with Unified Assistant (handles both DCA and Wellbore)
+        response = await app_state.unified_assistant.process_query(question, history)
         
         # Add to history
         manager.add_to_history(client_id, "user", question)
@@ -109,7 +111,9 @@ async def health_check():
         "status": "healthy" if provider_info["initialized"] else "degraded",
         "timestamp": datetime.now().isoformat(),
         "ai_service": provider_info,
-        "dca_integration": True
+        "dca_integration": True,
+        "wellbore_integration": True,
+        "version": APP_VERSION
     }
 
 @app.get("/api/provider-info")
@@ -146,7 +150,17 @@ async def websocket_endpoint(websocket: WebSocket):
         
         welcome_message = {
             "type": "response",
-            "explanation": f"Selamat datang di PHR Generative AI dengan DCA Integration (powered by {provider_name})! Saya siap membantu analisis DCA dan produksi sumur Anda. Silakan ajukan pertanyaan seputar DCA dalam bahasa apapun.",
+            "explanation": f"Selamat datang di PHR Generative AI dengan DCA & Wellbore Integration (powered by {provider_name})! 🚀\n\n"
+                          f"✅ **LAYANAN TERSEDIA:**\n"
+                          f"🔬 **DCA Analysis** - Decline curve analysis dan prediksi produksi\n"
+                          f"🏗️ **Wellbore Diagrams** - Visualisasi dan analisis struktur sumur\n"
+                          f"🤖 **Machine Learning** - Prediksi AI untuk pola produksi kompleks\n\n"
+                          f"💡 **CONTOH PERTANYAAN:**\n"
+                          f"• \"Tampilkan diagram wellbore untuk sumur PEB000026D1\"\n"
+                          f"• \"Analisis DCA untuk sumur PKU00001-01\"\n"
+                          f"• \"Show wellbore components dengan ESP system\"\n"
+                          f"• \"Prediksi ML produksi dengan ELR 10 BOPD\"\n\n"
+                          f"Silakan ajukan pertanyaan dalam bahasa Indonesia atau English! 🌐",
             "timestamp": datetime.now().isoformat()
         }
         await manager.send_personal_message(welcome_message, websocket)
@@ -203,6 +217,8 @@ async def get_stats():
         **connection_stats,
         "ai_service": provider_info,
         "dca_integration": True,
+        "wellbore_integration": True,
+        "version": APP_VERSION,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -217,7 +233,7 @@ async def get_chat_history(client_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    logger.info(f"Starting PHR Generative AI Chat Server with DCA Integration on {SERVER_HOST}:{SERVER_PORT}")
+    logger.info(f"Starting {APP_NAME} v{APP_VERSION} on {SERVER_HOST}:{SERVER_PORT}")
     
     uvicorn.run(
         "app:app",

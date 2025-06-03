@@ -38,3 +38,10 @@ milvus==2.3.3
 # Other utilities
 pydantic==2.9.2
 typing-extensions==4.12.2
+
+# Image processing and visualization
+Pillow>=10.0.0
+
+# HTTP requests for fetching wellbore icons
+requests>=2.31.0
+
