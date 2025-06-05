@@ -2,6 +2,7 @@ import re
 from typing import Dict, Any
 from langdetect import detect
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ class DCAQueryProcessor:
             "get_history": [
                 "data sumur", "history", "historis", "production data", "data produksi",
                 "show data", "tampilkan data", "produksi sumur", "well data",
-                "historical production", "riwayat produksi"
+                "historical production", "riwayat produksi", "grafik", "chart"
             ],
             "analyze_decline": [
                 "decline rate", "analisis dca", "dca analysis", "penurunan produksi",
@@ -73,7 +74,7 @@ class DCAQueryProcessor:
         return "general_dca"
     
     def extract_parameters(self, query: str) -> Dict[str, Any]:
-        """Extract parameters from the query with enhanced pattern matching"""
+        """Extract parameters from the query with ENHANCED date processing"""
         params = {}
         
         # Extract well code (format: PKU00001-01 or variations)
@@ -91,23 +92,68 @@ class DCAQueryProcessor:
                 params["well"] = well_match.group().replace("well ", "").replace("sumur ", "").upper()
                 break
         
-        # Extract dates with multiple formats
-        date_patterns = [
-            r'\d{4}-\d{2}-\d{2}',  # YYYY-MM-DD
-            r'\d{2}/\d{2}/\d{4}',  # DD/MM/YYYY
-            r'\d{2}-\d{2}-\d{4}',  # DD-MM-YYYY
+        # ===== ENHANCED DATE EXTRACTION =====
+        # First, try to extract date ranges with various separators and formats
+        date_range_patterns = [
+            # Pattern: dari/from X sampai/to Y
+            r'(?:dari|from)\s+([^\s]+(?:\s+\d{4})?)\s+(?:sampai|hingga|to)\s+([^\s]+(?:\s+\d{4})?)',
+            # Pattern: tanggal X - Y or X sampai Y
+            r'(?:tanggal\s+)?([^\s]+(?:\s+\d{4})?)\s+(?:sampai|hingga|-|to)\s+([^\s]+(?:\s+\d{4})?)',
+            # Pattern: periode X to Y
+            r'(?:periode\s+)?([^\s]+(?:\s+\d{4})?)\s+(?:sampai|hingga|to|-)\s+([^\s]+(?:\s+\d{4})?)'
         ]
         
-        dates = []
-        for pattern in date_patterns:
-            found_dates = re.findall(pattern, query)
-            dates.extend(found_dates)
+        dates_found = False
+        for pattern in date_range_patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                start_date_str = match.group(1).strip()
+                end_date_str = match.group(2).strip()
+                
+                # Parse and normalize dates
+                start_date = self._parse_flexible_date(start_date_str)
+                end_date = self._parse_flexible_date(end_date_str)
+                
+                if start_date and end_date:
+                    params["start_date"] = start_date
+                    params["end_date"] = end_date
+                    dates_found = True
+                    logger.info(f"Extracted date range: {start_date} to {end_date}")
+                    break
         
-        if len(dates) >= 2:
-            params["start_date"] = self._normalize_date(dates[0])
-            params["end_date"] = self._normalize_date(dates[1])
-        elif len(dates) == 1:
-            params["date"] = self._normalize_date(dates[0])
+        # If no date range found, try individual date patterns
+        if not dates_found:
+            date_patterns = [
+                r'\d{4}-\d{1,2}-\d{1,2}',  # YYYY-MM-DD or YYYY-M-D
+                r'\d{1,2}[-/]\d{1,2}[-/]\d{4}',  # DD/MM/YYYY or DD-MM-YYYY
+                r'\d{1,2}\s+(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+\d{4}',  # Indonesian months
+                r'\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}',  # English months
+                r'(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+\d{4}',  # Month Year (Indonesian)
+                r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}'  # Month Year (English)
+            ]
+            
+            all_dates = []
+            for pattern in date_patterns:
+                found_dates = re.findall(pattern, query, re.IGNORECASE)
+                all_dates.extend(found_dates)
+            
+            # Remove duplicates while preserving order
+            unique_dates = []
+            for date in all_dates:
+                if date not in unique_dates:
+                    unique_dates.append(date)
+            
+            if len(unique_dates) >= 2:
+                start_date = self._parse_flexible_date(unique_dates[0])
+                end_date = self._parse_flexible_date(unique_dates[1])
+                if start_date and end_date:
+                    params["start_date"] = start_date
+                    params["end_date"] = end_date
+                    logger.info(f"Extracted individual dates: {start_date} to {end_date}")
+            elif len(unique_dates) == 1:
+                parsed_date = self._parse_flexible_date(unique_dates[0])
+                if parsed_date:
+                    params["date"] = parsed_date
         
         # Extract time periods with multiple languages
         period_patterns = {
@@ -163,28 +209,87 @@ class DCAQueryProcessor:
             else:
                 params["top_wells"] = 5  # default
         
+        logger.info(f"Final extracted parameters: {params}")
         return params
     
-    def _normalize_date(self, date_str: str) -> str:
-        """Normalize date string to YYYY-MM-DD format"""
-        # Remove any extra spaces
+    def _parse_flexible_date(self, date_str: str) -> str:
+        """Parse various date formats and return YYYY-MM-DD format"""
         date_str = date_str.strip()
         
-        # If already in YYYY-MM-DD format
-        if re.match(r'\d{4}-\d{2}-\d{2}', date_str):
-            return date_str
+        # Indonesian month mapping
+        indonesian_months = {
+            'januari': '01', 'februari': '02', 'maret': '03', 'april': '04',
+            'mei': '05', 'juni': '06', 'juli': '07', 'agustus': '08',
+            'september': '09', 'oktober': '10', 'november': '11', 'desember': '12'
+        }
         
-        # Convert DD/MM/YYYY to YYYY-MM-DD
-        if re.match(r'\d{2}/\d{2}/\d{4}', date_str):
-            day, month, year = date_str.split('/')
-            return f"{year}-{month}-{day}"
+        # English month mapping
+        english_months = {
+            'january': '01', 'february': '02', 'march': '03', 'april': '04',
+            'may': '05', 'june': '06', 'july': '07', 'august': '08',
+            'september': '09', 'october': '10', 'november': '11', 'december': '12'
+        }
         
-        # Convert DD-MM-YYYY to YYYY-MM-DD
-        if re.match(r'\d{2}-\d{2}-\d{4}', date_str):
-            day, month, year = date_str.split('-')
-            return f"{year}-{month}-{day}"
-        
-        return date_str
+        try:
+            # Case 1: Already in YYYY-MM-DD format
+            if re.match(r'\d{4}-\d{1,2}-\d{1,2}', date_str):
+                parts = date_str.split('-')
+                year, month, day = parts[0], parts[1].zfill(2), parts[2].zfill(2)
+                return f"{year}-{month}-{day}"
+            
+            # Case 2: DD/MM/YYYY or DD-MM-YYYY format
+            if re.match(r'\d{1,2}[-/]\d{1,2}[-/]\d{4}', date_str):
+                separator = '/' if '/' in date_str else '-'
+                parts = date_str.split(separator)
+                day, month, year = parts[0].zfill(2), parts[1].zfill(2), parts[2]
+                return f"{year}-{month}-{day}"
+            
+            # Case 3: DD Month YYYY (Indonesian)
+            pattern = r'(\d{1,2})\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{4})'
+            match = re.match(pattern, date_str.lower())
+            if match:
+                day = match.group(1).zfill(2)
+                month = indonesian_months[match.group(2)]
+                year = match.group(3)
+                return f"{year}-{month}-{day}"
+            
+            # Case 4: DD Month YYYY (English)
+            pattern = r'(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})'
+            match = re.match(pattern, date_str.lower())
+            if match:
+                day = match.group(1).zfill(2)
+                month = english_months[match.group(2)]
+                year = match.group(3)
+                return f"{year}-{month}-{day}"
+            
+            # Case 5: Month YYYY (Indonesian) - assume first day of month
+            pattern = r'(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{4})'
+            match = re.match(pattern, date_str.lower())
+            if match:
+                month = indonesian_months[match.group(1)]
+                year = match.group(2)
+                return f"{year}-{month}-01"
+            
+            # Case 6: Month YYYY (English) - assume first day of month
+            pattern = r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})'
+            match = re.match(pattern, date_str.lower())
+            if match:
+                month = english_months[match.group(1)]
+                year = match.group(2)
+                return f"{year}-{month}-01"
+            
+            # Case 7: Special format D-M-YYYY
+            if re.match(r'\d{1,2}-\d{1,2}-\d{4}', date_str):
+                parts = date_str.split('-')
+                day, month, year = parts[0].zfill(2), parts[1].zfill(2), parts[2]
+                return f"{year}-{month}-{day}"
+            
+            logger.warning(f"Could not parse date: {date_str}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error parsing date '{date_str}': {e}")
+            return None
     
     def is_dca_related(self, query: str) -> bool:
         """Check if query is related to DCA with improved detection"""
@@ -204,7 +309,8 @@ class DCAQueryProcessor:
             
             # Operational terms
             "history", "historis", "data", "comparison", "perbandingan",
-            "performance", "performa", "optimization", "optimasi"
+            "performance", "performa", "optimization", "optimasi",
+            "grafik", "chart", "riwayat"
         ]
         
         query_lower = query.lower()
@@ -224,7 +330,7 @@ class DCAQueryProcessor:
             return True
         elif keyword_score >= 1 and well_code_match:
             return True
-        elif well_code_match and any(term in query_lower for term in ["production", "produksi", "data"]):
+        elif well_code_match and any(term in query_lower for term in ["production", "produksi", "data", "grafik", "chart"]):
             return True
         
         return False
